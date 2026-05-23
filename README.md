@@ -1,2 +1,4 @@
-# Models_Assemble
-# Models_Assemble
+这个项目旨在为了订阅了多个模型的用户，可以在claude code里面切换不同的模型，例如主模型使用强大的Opus或者GLM5.1这样的模型，子模型用较为便宜的比如deepseek-v4-flash这样的模型。（达到类似Opencode + OMO的效果）
+
+##核心场景
+这样比如说在CC-Switch中，我们只需要订阅这个项目的地址，就可以在配置中设置好不同的模型了。
