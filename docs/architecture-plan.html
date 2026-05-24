@@ -1,0 +1,549 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Models Assemble 架构计划</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f6f7f9;
+      --paper: #ffffff;
+      --ink: #17202a;
+      --muted: #5b6472;
+      --line: #d9dee7;
+      --accent: #0f766e;
+      --accent-2: #7c3aed;
+      --code-bg: #111827;
+      --code-ink: #e5e7eb;
+      --soft: #eef6f5;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
+      line-height: 1.68;
+      letter-spacing: 0;
+    }
+
+    .page {
+      max-width: 1120px;
+      margin: 0 auto;
+      padding: 40px 24px 64px;
+    }
+
+    header {
+      padding: 40px 0 28px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    h1 {
+      margin: 0 0 16px;
+      font-size: 42px;
+      line-height: 1.15;
+      letter-spacing: 0;
+    }
+
+    .subtitle {
+      max-width: 820px;
+      margin: 0;
+      color: var(--muted);
+      font-size: 18px;
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: 260px minmax(0, 1fr);
+      gap: 32px;
+      align-items: start;
+      margin-top: 28px;
+    }
+
+    nav {
+      position: sticky;
+      top: 18px;
+      padding: 18px;
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+    }
+
+    nav strong {
+      display: block;
+      margin-bottom: 10px;
+      font-size: 14px;
+      color: var(--muted);
+    }
+
+    nav a {
+      display: block;
+      padding: 7px 0;
+      color: var(--ink);
+      text-decoration: none;
+      font-size: 14px;
+    }
+
+    nav a:hover {
+      color: var(--accent);
+    }
+
+    main {
+      min-width: 0;
+    }
+
+    section {
+      padding: 28px 0;
+      border-bottom: 1px solid var(--line);
+    }
+
+    section:first-child {
+      padding-top: 0;
+    }
+
+    h2 {
+      margin: 0 0 14px;
+      font-size: 26px;
+      line-height: 1.25;
+      letter-spacing: 0;
+    }
+
+    h3 {
+      margin: 24px 0 10px;
+      font-size: 19px;
+      line-height: 1.35;
+      letter-spacing: 0;
+    }
+
+    p {
+      margin: 10px 0;
+    }
+
+    ul {
+      margin: 10px 0 10px 22px;
+      padding: 0;
+    }
+
+    li {
+      margin: 5px 0;
+    }
+
+    code {
+      font-family: "Cascadia Code", Consolas, monospace;
+      font-size: 0.94em;
+    }
+
+    pre {
+      margin: 16px 0;
+      padding: 18px;
+      overflow-x: auto;
+      background: var(--code-bg);
+      color: var(--code-ink);
+      border-radius: 8px;
+      line-height: 1.5;
+    }
+
+    pre code {
+      font-size: 14px;
+    }
+
+    .callout {
+      margin: 16px 0;
+      padding: 16px 18px;
+      background: var(--soft);
+      border-left: 4px solid var(--accent);
+      border-radius: 6px;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+      margin: 16px 0;
+    }
+
+    .tile {
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 16px;
+    }
+
+    .tile strong {
+      display: block;
+      margin-bottom: 6px;
+      color: var(--accent);
+    }
+
+    .timeline {
+      display: grid;
+      gap: 12px;
+      margin: 16px 0;
+    }
+
+    .step {
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 16px;
+    }
+
+    .step strong {
+      color: var(--accent-2);
+    }
+
+    table {
+      width: 100%;
+      margin: 16px 0;
+      border-collapse: collapse;
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    th,
+    td {
+      padding: 11px 12px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th {
+      color: var(--muted);
+      font-size: 13px;
+      background: #f0f2f5;
+    }
+
+    tr:last-child td {
+      border-bottom: 0;
+    }
+
+    .footer {
+      color: var(--muted);
+      font-size: 14px;
+      padding-top: 20px;
+    }
+
+    @media (max-width: 860px) {
+      .page {
+        padding: 24px 18px 44px;
+      }
+
+      h1 {
+        font-size: 32px;
+      }
+
+      .layout {
+        display: block;
+      }
+
+      nav {
+        position: static;
+        margin-bottom: 24px;
+      }
+
+      .grid {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <header>
+      <h1>Models Assemble 架构计划</h1>
+      <p class="subtitle">一个面向 Claude Code、OpenCode、CC-Switch 等 Coding Agent 的多模型聚合 Provider，把 Kimi、GLM、GPT、DeepSeek 等模型和 coding plan 统一在一个本地或远程网关后面。</p>
+    </header>
+
+    <div class="layout">
+      <nav aria-label="目录">
+        <strong>目录</strong>
+        <a href="#positioning">项目定位</a>
+        <a href="#principles">设计原则</a>
+        <a href="#stack">技术栈</a>
+        <a href="#architecture">目标架构</a>
+        <a href="#interfaces">对外接口</a>
+        <a href="#config">配置设计</a>
+        <a href="#security">安全凭据</a>
+        <a href="#adapters">Provider Adapter</a>
+        <a href="#routing">路由策略</a>
+        <a href="#mvp">MVP 路线</a>
+        <a href="#risks">风险清单</a>
+        <a href="#tests">测试策略</a>
+        <a href="#first-step">推荐第一步</a>
+      </nav>
+
+      <main>
+        <section id="positioning">
+          <h2>1. 项目定位</h2>
+          <p>Models Assemble 的目标不是再做一个普通的模型 API SDK，而是做一个面向 Coding Agent 的多模型聚合 Provider。</p>
+          <p>它向 Claude Code、OpenCode、CC-Switch 以及其他支持自定义 Provider 的工具暴露统一模型接口，然后在后端连接 Kimi、GLM、GPT、DeepSeek、OpenRouter、本地模型等不同供应商。</p>
+          <div class="grid">
+            <div class="tile"><strong>统一入口</strong>一个 base_url 接入多个 coding plan 或模型 API。</div>
+            <div class="tile"><strong>统一模型名</strong>用 assemble-main、assemble-plan、assemble-cheap 屏蔽真实后端。</div>
+            <div class="tile"><strong>统一策略</strong>集中处理路由、fallback、预算、限速和日志。</div>
+          </div>
+          <pre><code>Claude Code / OpenCode / CC-Switch
+        |
+        | Anthropic-compatible / OpenAI-compatible request
+        v
+Models Assemble Gateway
+        |
+        | route / normalize / stream / fallback / budget
+        v
+Kimi Coding Plan / GLM Coding Plan / GPT / DeepSeek / OpenRouter / Local Models</code></pre>
+        </section>
+
+        <section id="principles">
+          <h2>2. 设计原则</h2>
+          <h3>不把项目做成绕过限制的脚本</h3>
+          <p>有些 coding plan 可能只允许官方支持的工具或框架接入。Models Assemble 应该定位成 Provider Gateway：客户端仍然是 Claude Code、OpenCode 等 coding agent，网关负责协议适配、路由和可观测性。</p>
+          <h3>协议优先，而不是模型优先</h3>
+          <p>Coding Agent 依赖 streaming、tool calls、tool results、stop reason、usage、long context 和 reasoning 字段。系统核心应该先抽象协议，再接入模型。</p>
+          <h3>Provider 可插拔</h3>
+          <pre><code>Client Request
+    -> Normalized Request
+    -> Provider Request
+    -> Provider Stream / Response
+    -> Normalized Event
+    -> Client-compatible Stream / Response</code></pre>
+        </section>
+
+        <section id="stack">
+          <h2>3. 推荐技术栈</h2>
+          <p>核心网关推荐使用 Rust。这个项目的主要难点是高并发流式代理、协议转换、长连接稳定性和多 provider 错误恢复，Rust 更适合作为长期核心。</p>
+          <table>
+            <thead>
+              <tr><th>领域</th><th>推荐</th><th>用途</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>HTTP Server</td><td>axum</td><td>对外暴露 Anthropic/OpenAI-compatible API</td></tr>
+              <tr><td>异步运行时</td><td>tokio</td><td>SSE、上游请求、并发控制</td></tr>
+              <tr><td>HTTP Client</td><td>reqwest</td><td>调用 Kimi、GLM、GPT、DeepSeek 等 provider</td></tr>
+              <tr><td>序列化</td><td>serde / serde_json</td><td>协议结构转换</td></tr>
+              <tr><td>日志</td><td>tracing</td><td>request id、latency、provider 命中记录</td></tr>
+              <tr><td>CLI</td><td>clap</td><td>serve、validate、doctor、test-provider</td></tr>
+            </tbody>
+          </table>
+          <div class="callout">Python 可以保留给 provider 探测脚本、mock server、回归测试和日志分析。TypeScript / React 可以用于后期 dashboard，但初期不应该先做 UI。</div>
+        </section>
+
+        <section id="architecture">
+          <h2>4. 目标架构</h2>
+          <p>MVP 阶段先保持 3 个 crate，等 normalized schema、adapter trait 和路由边界稳定后再拆细。</p>
+          <pre><code>models-assemble/
+  crates/
+    ma-cli/             # CLI: serve, validate, doctor, compat-probe
+    ma-server/          # HTTP server, auth, SSE, request lifecycle
+    ma-core/            # config, protocol, routing, providers, errors
+  docs/
+  examples/</code></pre>
+          <h3>请求生命周期</h3>
+          <ol>
+            <li>Client 发送请求到 <code>/v1/messages</code> 或 <code>/v1/chat/completions</code>。</li>
+            <li>Gateway 校验本地 API key。</li>
+            <li>Protocol layer 转换为 <code>NormalizedRequest</code>。</li>
+            <li>Router 选择 <code>ProviderTarget</code>。</li>
+            <li>Provider adapter 转换成上游请求。</li>
+            <li>Gateway 打开上游 streaming 请求。</li>
+            <li>Provider adapter 把上游 chunk 映射为 <code>NormalizedEvent</code>。</li>
+            <li>Protocol layer 输出客户端兼容的 stream。</li>
+          </ol>
+          <h3>Streaming 与 Tool 状态机</h3>
+          <pre><code>Anthropic:
+message_start -> content_block_start -> content_block_delta*
+  -> content_block_stop -> message_delta* -> message_stop
+
+OpenAI:
+chat.completion.chunk* -> data: [DONE]</code></pre>
+          <p>内部 stream assembler 要维护 message id、choice index、content block index、tool call id、partial JSON buffer、finish reason、usage 和 upstream state。stream 开始前可以 fallback；已经输出 token 或 tool delta 后不做透明 fallback。</p>
+          <h3>内部错误模型</h3>
+          <pre><code>NormalizedError
+  category: auth | rate_limited | timeout | overloaded | invalid_request | provider_bug | network | unknown
+  retryable: true | false
+  http_status
+  provider_code
+  safe_message
+  raw_debug</code></pre>
+        </section>
+
+        <section id="interfaces">
+          <h2>5. 对外接口</h2>
+          <h3>Anthropic-compatible API</h3>
+          <pre><code>POST /v1/messages
+GET  /v1/models</code></pre>
+          <p>目标是服务 Claude Code 和兼容 Anthropic Messages API 的工具。重点支持 stream、content block events、tool use、stop reason 和 usage。</p>
+          <h3>OpenAI-compatible API</h3>
+          <pre><code>POST /v1/chat/completions
+GET  /v1/models</code></pre>
+          <p>目标是服务 OpenCode、Cline、Roo Code、Continue 等工具。重点支持 SSE、tool_calls、finish_reason、usage 和 model list。</p>
+          <h3>管理 CLI</h3>
+          <pre><code>ma serve --config config.yaml
+ma validate --config config.yaml
+ma compat-probe --anthropic
+ma compat-probe --openai
+ma test-provider glm-main
+ma list-models
+ma doctor</code></pre>
+          <p>管理 HTTP API 默认不启用。即使启用，也应该默认只绑定 <code>127.0.0.1</code>，并复用本地管理 key。</p>
+        </section>
+
+        <section id="config">
+          <h2>6. 配置设计</h2>
+          <p>建议使用 YAML。它更适合表达多 provider、多模型别名和路由规则。</p>
+          <pre><code>server:
+  bind: 127.0.0.1:8787
+  api_keys:
+    - ma-local-dev-key
+
+models:
+  assemble-main:
+    provider: glm-coding
+    model: glm-5.1
+  assemble-plan:
+    provider: openai-coding
+    model: gpt-5.1-codex
+  assemble-cheap:
+    provider: deepseek
+    model: deepseek-v4-flash
+  assemble-long:
+    provider: kimi
+    model: kimi-long-context
+
+providers:
+  glm-coding:
+    type: zhipu_coding_plan
+    base_url: https://example.zhipu.endpoint
+    api_key_env: ZHIPU_CODING_API_KEY
+  kimi:
+    type: openai_compatible
+    base_url: https://api.moonshot.cn/v1
+    api_key_env: KIMI_API_KEY
+
+routing:
+  default: assemble-main
+  rules:
+    - name: subagent-cheap-model
+      when:
+        metadata:
+          subagent: true
+      use: assemble-cheap
+
+fallback:
+  assemble-main:
+    - assemble-plan
+    - assemble-cheap</code></pre>
+        </section>
+
+        <section id="security">
+          <h2>6.1 安全凭据</h2>
+          <p>默认安全模型是 single-user local gateway。第一版不承诺多用户隔离，也不应该默认暴露到公网。</p>
+          <ul>
+            <li>默认绑定 <code>127.0.0.1</code>，只有用户显式配置时才监听 <code>0.0.0.0</code>。</li>
+            <li>provider key 优先从环境变量、系统 keychain 或 secret file 读取，不建议写入 YAML。</li>
+            <li><code>ma doctor</code> 检查配置文件权限，发现过宽权限时警告。</li>
+            <li>日志默认脱敏 Authorization、API key、cookies、token 和常见 secret 字段。</li>
+            <li>默认不记录 prompt、response、tool 参数正文。</li>
+            <li>provider token 绝不透传给客户端。</li>
+          </ul>
+          <h3>缓存边界</h3>
+          <p>第一版不做 response cache。优先做 model list cache、provider health cache、token counting cache 和 provider capability cache。后续 semantic cache 必须支持 TTL、项目隔离、provider 隔离、显式开启和一键清理。</p>
+        </section>
+
+        <section id="adapters">
+          <h2>7. Provider Adapter</h2>
+          <p>每个 provider adapter 实现统一接口，隔离供应商协议变化。</p>
+          <pre><code>trait ProviderAdapter {
+    fn name(&self) -> &str;
+    fn capabilities(&self) -> ProviderCapabilities;
+    fn compliance(&self) -> ProviderCompliance;
+    async fn health_check(&self) -> ProviderHealth;
+    async fn list_models(&self) -> Vec&lt;ModelInfo&gt;;
+    async fn complete(&self, request: NormalizedRequest) -> ProviderResult&lt;NormalizedResponse&gt;;
+    async fn stream(&self, request: NormalizedRequest) -> ProviderResult&lt;NormalizedStream&gt;;
+}</code></pre>
+          <p>第一批 adapter 建议从 OpenAI-compatible 开始，然后再做 Anthropic-compatible、GLM Coding Plan、Kimi、DeepSeek、OpenRouter。</p>
+          <h3>能力协商</h3>
+          <p>router 不应该只按模型名路由，还要确认 provider 是否支持 streaming、tools、parallel tool calls、vision、JSON mode、reasoning、max context、max output 和 native protocol。</p>
+          <h3>接入等级</h3>
+          <pre><code>official_api              官方公开 API
+official_coding_endpoint  官方文档允许的 coding 工具 endpoint
+compatible_proxy          协议兼容，但官方未明确承诺该用途
+unsupported               不接入</code></pre>
+        </section>
+
+        <section id="routing">
+          <h2>8. 路由策略</h2>
+          <div class="timeline">
+            <div class="step"><strong>第一阶段：</strong>只按请求里的 model alias 路由，例如 assemble-main -> glm-5.1。</div>
+            <div class="step"><strong>第二阶段：</strong>支持 fallback，例如 timeout、429、5xx 时切到备用模型。</div>
+            <div class="step"><strong>第三阶段：</strong>支持规则路由，例如长上下文走 Kimi，子任务走 cheap model，规划任务走强 reasoning 模型。</div>
+          </div>
+          <p>早期只支持显式 model alias、上下文长度、provider health、错误 fallback。任务语义分类放到后期。</p>
+          <h3>限流与预算</h3>
+          <p>第一版建议支持 local client rate limit、per-provider concurrency limit、per-provider retry budget、daily/monthly token cap、daily/monthly cost cap 和 fallback cost policy。默认不应在用户无感知的情况下从便宜模型 fallback 到昂贵模型。</p>
+        </section>
+
+        <section id="mvp">
+          <h2>9. MVP 路线</h2>
+          <div class="timeline">
+            <div class="step"><strong>Milestone 0：</strong>Rust workspace、CLI、配置加载、<code>/health</code>，以及 <code>ma compat-probe</code> 最小 mock provider，用来验证 Claude Code / OpenCode / CC-Switch 是否接受自定义 base_url、模型列表和 SSE。</div>
+            <div class="step"><strong>Milestone 1：</strong>OpenAI-compatible <code>/v1/chat/completions</code>，支持 non-stream、stream、tool_calls、错误映射和 client disconnect 取消上游请求。</div>
+            <div class="step"><strong>Milestone 2：</strong>模型别名、fallback、命中日志。</div>
+            <div class="step"><strong>Milestone 3：</strong>Anthropic-compatible <code>/v1/messages</code>，支持 Anthropic SSE event。</div>
+            <div class="step"><strong>Milestone 4：</strong>接入 GLM、Kimi、GPT coding plan，建立能力矩阵。</div>
+            <div class="step"><strong>Milestone 5：</strong><code>ma doctor</code>、usage、latency、fallback chain、dashboard 可选；默认不采集 prompt、response 和 tool 参数正文。</div>
+          </div>
+        </section>
+
+        <section id="risks">
+          <h2>10. 风险清单</h2>
+          <table>
+            <thead>
+              <tr><th>风险</th><th>说明</th><th>处理策略</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Claude Code 兼容性</td><td>需要验证自定义 base_url、SSE、tool use 和错误格式。</td><td>优先做真实客户端集成测试。</td></tr>
+              <tr><td>Coding Plan 限制</td><td>某些套餐可能限制接入方式。</td><td>只支持官方明确允许的方式，实验方案明确标记。</td></tr>
+              <tr><td>Tool Use 差异</td><td>OpenAI 和 Anthropic 的 tool call streaming 语义不同。</td><td>用 normalized event 做隔离，并针对多 tool call 测试。</td></tr>
+              <tr><td>Streaming 边界</td><td>上游超时、下游断开、半截 JSON、请求取消。</td><td>stream 开始前允许 fallback，stream 开始后不做透明 fallback。</td></tr>
+            </tbody>
+          </table>
+        </section>
+
+        <section id="tests">
+          <h2>11. 测试策略</h2>
+          <h3>单元测试</h3>
+          <p>覆盖协议转换、provider event 转换、routing rule 和 fallback decision。</p>
+          <h3>集成测试</h3>
+          <p>使用 mock provider 覆盖正常 streaming、429、500、timeout、malformed chunk 和 tool call chunk。</p>
+          <h3>真实客户端测试</h3>
+          <pre><code>OpenCode -> Models Assemble -> mock/OpenAI-compatible provider
+Claude Code -> Models Assemble -> mock/OpenAI-compatible provider
+CC-Switch -> Models Assemble -> provider</code></pre>
+        </section>
+
+        <section id="first-step">
+          <h2>12. 推荐第一步</h2>
+          <p>第一步不要直接接 GLM、Kimi、GPT 三家。先证明网关闭环。</p>
+          <pre><code>OpenCode
+  -> Models Assemble /v1/chat/completions
+  -> OpenAI-compatible adapter
+  -> 任意普通 OpenAI-compatible 模型</code></pre>
+          <p>确认 OpenCode 能把你的服务当 provider、SSE streaming 没问题、模型别名能工作、日志能看到完整链路。之后再做 Anthropic-compatible 入口，最后接入具体 coding plan。</p>
+          <div class="callout">最终边界：Models Assemble 不替代 Claude Code / OpenCode，而是成为它们背后的多模型 Provider。</div>
+        </section>
+
+        <p class="footer">对应 Markdown 文档：docs/architecture-plan.md</p>
+      </main>
+    </div>
+  </div>
+</body>
+</html>

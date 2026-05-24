@@ -1,0 +1,9 @@
+doc/*
+target/
+*.pdb
+node_modules/
+dist/
+dist-ssr/
+*.tsbuildinfo
+vite.*.log
+apps/desktop/src-tauri/gen/

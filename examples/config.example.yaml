@@ -1,0 +1,81 @@
+server:
+  bind: 127.0.0.1:8787
+  api_keys:
+    - ma-local-dev-key
+
+models:
+  assemble-mock:
+    provider: mock
+    model: mock-coding-model
+
+  assemble-main:
+    provider: openai-compatible
+    model: gpt-coding-model
+
+  assemble-claude:
+    provider: anthropic-compatible
+    model: claude-opus-coding-model
+
+  assemble-deepseek:
+    provider: deepseek-anthropic
+    model: deepseek-v4-pro
+
+  assemble-kimi:
+    provider: kimi-coding
+    model: kimi-for-coding
+
+  assemble-glm:
+    provider: glm-anthropic
+    model: glm-5.1
+
+  assemble-cheap:
+    provider: deepseek
+    model: deepseek-v4-flash
+
+providers:
+  mock:
+    type: mock
+    compliance: official_api
+
+  openai-compatible:
+    type: openai_compatible
+    base_url: https://api.openai.com/v1
+    api_key_env: OPENAI_API_KEY
+    compliance: official_api
+
+  anthropic-compatible:
+    type: anthropic_compatible
+    base_url: https://api.anthropic.com/v1
+    api_key_env: ANTHROPIC_API_KEY
+    compliance: official_api
+
+  deepseek-anthropic:
+    type: anthropic_compatible
+    base_url: https://api.deepseek.com/anthropic
+    api_key_env: DEEPSEEK_API_KEY
+    compliance: official_coding_endpoint
+
+  kimi-coding:
+    type: anthropic_compatible
+    base_url: https://api.kimi.com/coding/v1
+    api_key_env: KIMI_API_KEY
+    compliance: official_coding_endpoint
+
+  glm-anthropic:
+    type: anthropic_compatible
+    base_url: https://open.bigmodel.cn/api/anthropic/v1
+    api_key_env: GLM_API_KEY
+    compliance: official_coding_endpoint
+
+  deepseek:
+    type: openai_compatible
+    base_url: https://api.deepseek.com/v1
+    api_key_env: DEEPSEEK_API_KEY
+    compliance: official_api
+
+routing:
+  default: assemble-mock
+
+fallback:
+  assemble-main:
+    - assemble-cheap
