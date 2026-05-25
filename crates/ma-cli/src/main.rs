@@ -93,7 +93,7 @@ async fn main() -> anyhow::Result<()> {
                     println!("openai endpoint: POST http://{bind}/v1/chat/completions");
                 }
             }
-            ma_server::serve(ma_server::compat_config(bind)).await
+            ma_server::serve(ma_server::handlers::openai::compat_config(bind)).await
         }
     }
 }
@@ -107,11 +107,10 @@ fn init_tracing() {
 }
 
 fn load_and_validate(config: PathBuf) -> anyhow::Result<AppConfig> {
-    let config = AppConfig::load(&config).map_err(|error| {
+    let config = AppConfig::load(&config).inspect_err(|error| {
         if let Some(raw_debug) = &error.raw_debug {
             eprintln!("config debug: {raw_debug}");
         }
-        error
     }).with_context(|| {
         format!(
             "failed to load config. Try `ma compat-probe` for a config-free mock server, or create {}",

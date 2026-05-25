@@ -50,6 +50,11 @@ type TestResult = {
   text_preview: string
 }
 
+type GatewayStatus = {
+  running: boolean
+  bind: string
+}
+
 declare global {
   interface Window {
     __TAURI__?: {
@@ -131,6 +136,11 @@ function App() {
   const [showSecret, setShowSecret] = useState(false)
   const [notice, setNotice] = useState('Ready')
   const [isTesting, setIsTesting] = useState(false)
+  const [gatewayStatus, setGatewayStatus] = useState<GatewayStatus>({
+    running: false,
+    bind: '127.0.0.1:8787',
+  })
+  const [isGatewayLoading, setIsGatewayLoading] = useState(false)
 
   const selectedPlan = plans.find((plan) => plan.id === selectedId) ?? plans[0]
   const filteredPlans = plans.filter((plan) =>
@@ -165,6 +175,12 @@ function App() {
   useEffect(() => {
     localStorage.setItem(THEME_KEY, theme)
   }, [theme])
+
+  useEffect(() => {
+    refreshGatewayStatus()
+    const interval = window.setInterval(refreshGatewayStatus, 5000)
+    return () => window.clearInterval(interval)
+  }, [])
 
   function updateSelectedPlan(update: Partial<Plan>) {
     setPlans((current) =>
@@ -267,6 +283,38 @@ function App() {
     }
   }
 
+  async function refreshGatewayStatus() {
+    try {
+      const status = await invokeOrMock<GatewayStatus>('get_gateway_status', {})
+      setGatewayStatus(status)
+    } catch {
+      setGatewayStatus((prev) => prev)
+    }
+  }
+
+  async function toggleGateway() {
+    setIsGatewayLoading(true)
+    try {
+      if (gatewayStatus.running) {
+        const status = await invokeOrMock<GatewayStatus>('stop_gateway', {})
+        setGatewayStatus(status)
+        setNotice('Gateway stopped')
+      } else {
+        const status = await invokeOrMock<GatewayStatus>('start_gateway', {
+          configPath: '',
+        })
+        setGatewayStatus(status)
+        setNotice('Gateway started')
+      }
+    } catch (error) {
+      setNotice(
+        error instanceof Error ? error.message : 'Gateway operation failed',
+      )
+    } finally {
+      setIsGatewayLoading(false)
+    }
+  }
+
   return (
     <div className="app-shell" data-theme={theme}>
       <aside className="rail">
@@ -319,9 +367,19 @@ function App() {
           </div>
           <div>
             <strong>Gateway</strong>
-            <span>127.0.0.1:8787</span>
+            <span>{gatewayStatus.bind}</span>
           </div>
-          <span className="live-pill">Ready</span>
+          <button
+            className={`live-pill ${gatewayStatus.running ? 'running' : 'stopped'}`}
+            onClick={toggleGateway}
+            disabled={isGatewayLoading}
+          >
+            {isGatewayLoading
+              ? '...'
+              : gatewayStatus.running
+                ? 'Running'
+                : 'Stopped'}
+          </button>
         </div>
       </aside>
 

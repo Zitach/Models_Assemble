@@ -1,7 +1,15 @@
-use std::{collections::BTreeMap, fs, io::ErrorKind, net::SocketAddr};
+use std::{
+    collections::BTreeMap,
+    fs,
+    io::ErrorKind,
+    net::SocketAddr,
+    process::{Child, Command},
+    sync::Mutex,
+};
 
 use ma_core::{
-    AppConfig, ProviderCompliance, ProviderConfig, ProviderTestResult, ProviderType, ServerConfig,
+    AppConfig, ProviderCompliance, ProviderConfig, ProviderTestResult,
+    ProviderType, ServerConfig,
     config::{ModelRoute, RoutingConfig},
     provider_test,
 };
@@ -11,7 +19,7 @@ use tauri::Manager;
 #[derive(Debug, Serialize)]
 struct GatewayStatus {
     running: bool,
-    bind: &'static str,
+    bind: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -35,12 +43,104 @@ struct UiPlan {
     last_test: String,
 }
 
+struct GatewayState {
+    child: Mutex<Option<Child>>,
+    bind: Mutex<String>,
+}
+
 #[tauri::command]
-fn get_gateway_status() -> GatewayStatus {
+fn get_gateway_status(state: tauri::State<GatewayState>) -> GatewayStatus {
+    let child = state.child.lock().unwrap();
+    let bind = state.bind.lock().unwrap();
     GatewayStatus {
-        running: false,
-        bind: "127.0.0.1:8787",
+        running: child.is_some(),
+        bind: bind.clone(),
     }
+}
+
+#[tauri::command]
+fn start_gateway(
+    app: tauri::AppHandle,
+    state: tauri::State<GatewayState>,
+    config_path: String,
+) -> Result<GatewayStatus, String> {
+    let mut child_lock = state.child.lock().unwrap();
+    if child_lock.is_some() {
+        let bind = state.bind.lock().unwrap();
+        return Ok(GatewayStatus {
+            running: true,
+            bind: bind.clone(),
+        });
+    }
+
+    let config_dir = app
+        .path()
+        .app_config_dir()
+        .map_err(|error| error.to_string())?;
+
+    let binary_path = if cfg!(target_os = "windows") {
+        config_dir.join("ma-cli.exe")
+    } else {
+        config_dir.join("ma-cli")
+    };
+
+    let mut command = if binary_path.exists() {
+        let mut cmd = Command::new(&binary_path);
+        cmd.arg("serve").arg("--config").arg(&config_path);
+        cmd
+    } else {
+        let mut cmd = Command::new("cargo");
+        cmd.arg("run")
+            .arg("-p")
+            .arg("ma-cli")
+            .arg("--")
+            .arg("serve")
+            .arg("--config")
+            .arg(&config_path);
+        cmd
+    };
+
+    let child = command
+        .spawn()
+        .map_err(|error| format!("failed to start gateway: {error}"))?;
+
+    *child_lock = Some(child);
+
+    let bind = state.bind.lock().unwrap();
+    Ok(GatewayStatus {
+        running: true,
+        bind: bind.clone(),
+    })
+}
+
+#[tauri::command]
+fn stop_gateway(state: tauri::State<GatewayState>) -> Result<GatewayStatus, String> {
+    let mut child_lock = state.child.lock().unwrap();
+    if let Some(mut child) = child_lock.take() {
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            let _ = unsafe {
+                Command::new("kill")
+                    .arg("-TERM")
+                    .arg(child.id().to_string())
+                    .pre_exec(|| Ok(()))
+                    .status()
+            };
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = child.kill();
+        }
+
+        let _ = child.wait();
+    }
+
+    let bind = state.bind.lock().unwrap();
+    Ok(GatewayStatus {
+        running: false,
+        bind: bind.clone(),
+    })
 }
 
 #[tauri::command]
@@ -169,6 +269,7 @@ fn build_app_config(plans: &[UiPlan]) -> Result<AppConfig, String> {
                 .parse::<SocketAddr>()
                 .expect("default desktop bind address is valid"),
             api_keys: vec!["ma-local-dev-key".to_string()],
+            first_token_timeout_secs: None,
         },
         models,
         providers,
@@ -200,8 +301,14 @@ fn parse_provider_type(protocol: &str) -> Result<ProviderType, String> {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .manage(GatewayState {
+            child: Mutex::new(None),
+            bind: Mutex::new("127.0.0.1:8787".to_string()),
+        })
         .invoke_handler(tauri::generate_handler![
             get_gateway_status,
+            start_gateway,
+            stop_gateway,
             test_provider,
             save_plans,
             load_plans

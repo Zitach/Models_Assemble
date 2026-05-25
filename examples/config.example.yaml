@@ -1,7 +1,16 @@
+# Normalized protocol is now the default and only path.
+# All requests go through the ProviderAdapter trait, which unifies
+# how Models Assemble talks to every upstream provider.
+# The experimental.use_normalized flag has been removed; it is no longer needed.
 server:
   bind: 127.0.0.1:8787
   api_keys:
     - ma-local-dev-key
+  # first_token_timeout_secs controls how long to wait for the first SSE chunk
+  # when using stream fallback. If the first chunk doesn't arrive within this
+  # window, the request may be retried on the next fallback model.
+  # Default is 15 seconds. Uncomment and adjust if needed.
+  # first_token_timeout_secs: 15
 
 models:
   assemble-mock:

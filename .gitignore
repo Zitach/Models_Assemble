@@ -7,3 +7,6 @@ dist-ssr/
 *.tsbuildinfo
 vite.*.log
 apps/desktop/src-tauri/gen/
+
+.DS_Store
+.sisyphus/

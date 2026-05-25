@@ -206,6 +206,20 @@ button {
   padding: 3px 8px;
   background: var(--success-soft);
   color: var(--success);
+  border: 1px solid transparent;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+}
+
+.live-pill.stopped {
+  background: var(--muted-soft, var(--line));
+  color: var(--muted);
+}
+
+.live-pill:disabled {
+  cursor: wait;
+  opacity: 0.62;
 }
 
 .workbench {
