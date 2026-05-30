@@ -2365,13 +2365,17 @@ dependencies = [
 name = "models-assemble-desktop"
 version = "0.1.0"
 dependencies = [
+ "axum",
  "ma-core",
+ "ma-server",
+ "reqwest 0.12.28",
  "serde",
  "serde_json",
  "serde_yaml",
  "tauri",
  "tauri-build",
  "tauri-plugin-opener",
+ "tokio",
 ]
 
 [[package]]

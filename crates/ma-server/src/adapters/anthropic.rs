@@ -50,8 +50,13 @@ impl AnthropicAdapter {
     }
 
     fn request_to_body(&self, request: NormalizedRequest) -> serde_json::Value {
+        let model = if self.model.is_empty() {
+            request.model_alias.clone()
+        } else {
+            self.model.clone()
+        };
         let mut body = serde_json::json!({
-            "model": self.model.clone(),
+            "model": model,
             "messages": request.messages,
             "max_tokens": request.max_tokens.unwrap_or(4096),
         });
@@ -150,15 +155,7 @@ impl ProviderAdapter for AnthropicAdapter {
     }
 
     fn capabilities(&self) -> ProviderCapabilities {
-        ProviderCapabilities::new(
-            true,
-            true,
-            false,
-            false,
-            true,
-            200000,
-            8192,
-        )
+        ProviderCapabilities::new(true, true, false, false, true, 200000, 8192)
     }
 
     async fn complete(
@@ -502,6 +499,16 @@ mod tests {
         assert_eq!(body["temperature"], 0.7);
         assert_eq!(body["messages"].as_array().unwrap().len(), 1);
         assert!(body["system"].is_object());
+    }
+
+    #[test]
+    fn request_to_body_uses_request_model_when_adapter_model_is_empty() {
+        let adapter = AnthropicAdapter::new("test", "http://localhost/v1", None, "");
+        let request = NormalizedRequest::new("glm-5.1".to_string());
+
+        let body = adapter.request_to_body(request);
+
+        assert_eq!(body["model"], "glm-5.1");
     }
 
     #[test]

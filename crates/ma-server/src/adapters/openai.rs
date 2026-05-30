@@ -51,8 +51,13 @@ impl OpenAiAdapter {
     }
 
     fn build_request_body(&self, request: &NormalizedRequest) -> serde_json::Value {
+        let model = if self.upstream_model.is_empty() {
+            request.model_alias.as_str()
+        } else {
+            self.upstream_model.as_str()
+        };
         let mut body = serde_json::json!({
-            "model": self.upstream_model,
+            "model": model,
             "messages": request.messages.iter().map(openai_message).collect::<Vec<_>>(),
         });
 
@@ -535,6 +540,16 @@ mod tests {
         assert!(caps.parallel_tool_calls);
         assert!(caps.vision);
         assert!(!caps.thinking);
+    }
+
+    #[test]
+    fn openai_adapter_uses_request_model_when_adapter_model_is_empty() {
+        let adapter = OpenAiAdapter::new("test-openai", "http://localhost:1234/v1", None, "");
+        let request = NormalizedRequest::new("deepseek-chat".to_string());
+
+        let body = adapter.build_request_body(&request);
+
+        assert_eq!(body["model"], "deepseek-chat");
     }
 
     #[tokio::test]

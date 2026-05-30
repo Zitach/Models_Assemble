@@ -15,8 +15,8 @@
         "title": "Models Assemble",
         "width": 1440,
         "height": 920,
-        "minWidth": 1180,
-        "minHeight": 760,
+        "minWidth": 800,
+        "minHeight": 600,
         "resizable": true,
         "center": true
       }

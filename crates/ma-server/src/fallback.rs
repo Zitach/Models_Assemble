@@ -19,8 +19,10 @@ pub async fn stream_with_fallback(
     state: &AppState,
     request: NormalizedRequest,
     model_alias: &str,
-) -> Result<Pin<Box<dyn Stream<Item = Result<NormalizedEvent, NormalizedError>> + Send>>, NormalizedError>
-{
+) -> Result<
+    Pin<Box<dyn Stream<Item = Result<NormalizedEvent, NormalizedError>> + Send>>,
+    NormalizedError,
+> {
     let timeout = state
         .config
         .server
@@ -63,8 +65,6 @@ pub async fn stream_with_fallback(
 
     Err(last_error.unwrap_or_else(|| fallback_error("all fallback adapters exhausted")))
 }
-
-
 
 enum FirstChunk {
     GotFirst {
@@ -157,10 +157,7 @@ fn fallback_error(message: &str) -> NormalizedError {
 }
 
 fn timeout_error(timeout: Duration) -> NormalizedError {
-    fallback_error(&format!(
-        "first chunk timeout after {}s",
-        timeout.as_secs()
-    ))
+    fallback_error(&format!("first chunk timeout after {}s", timeout.as_secs()))
 }
 
 #[cfg(test)]
@@ -168,14 +165,11 @@ mod tests {
     use super::*;
     use async_trait::async_trait;
     use futures_util::StreamExt;
-    use ma_core::adapter::{NormalizedResponse, ProviderCapabilities, ProviderAdapter};
-    use ma_core::config::ModelRoute;
     use ma_core::ServerConfig;
+    use ma_core::adapter::{NormalizedResponse, ProviderAdapter, ProviderCapabilities};
+    use ma_core::config::ModelRoute;
     use std::collections::{BTreeMap, HashMap};
     use std::sync::Arc;
-
-    
-
 
     enum Behavior {
         Pending,
@@ -208,9 +202,9 @@ mod tests {
             NormalizedError,
         > {
             match &self.0 {
-                Behavior::Pending => Ok(Box::pin(futures_util::stream::once(
-                    std::future::pending(),
-                ))),
+                Behavior::Pending => {
+                    Ok(Box::pin(futures_util::stream::once(std::future::pending())))
+                }
                 Behavior::Fast => Ok(Box::pin(futures_util::stream::once(async {
                     Ok(NormalizedEvent::MessageStop {
                         extra: HashMap::new(),
@@ -237,9 +231,6 @@ mod tests {
             }
         }
     }
-
-    
-
 
     fn make_state(
         models: BTreeMap<String, ModelRoute>,
@@ -270,9 +261,6 @@ mod tests {
     fn req() -> NormalizedRequest {
         NormalizedRequest::new("primary".into())
     }
-
-    
-
 
     #[tokio::test]
     async fn fast_adapter_no_fallback() {
@@ -421,9 +409,11 @@ mod tests {
     #[tokio::test]
     async fn unknown_model_returns_error() {
         let state = make_state(BTreeMap::new(), BTreeMap::new(), HashMap::new(), Some(1));
-        assert!(stream_with_fallback(&state, req(), "nonexistent")
-            .await
-            .is_err());
+        assert!(
+            stream_with_fallback(&state, req(), "nonexistent")
+                .await
+                .is_err()
+        );
     }
 
     #[test]

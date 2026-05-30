@@ -1,4 +1,6 @@
 doc/*
+docs/
+design.png
 target/
 *.pdb
 node_modules/

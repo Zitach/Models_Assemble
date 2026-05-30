@@ -1,12 +1,15 @@
 use axum::body::Body;
 use axum::response::Response;
 use axum::{Json, extract::State, response::IntoResponse};
-use futures_util::StreamExt;
+use futures_util::{StreamExt, TryStreamExt};
 use http::{HeaderMap, StatusCode};
+use ma_core::ProviderType;
 use ma_core::normalized::NormalizedRequest;
 use serde_json::Value;
 
-use crate::{AppState, auth::unauthorized_if_needed, error::error_response};
+use crate::{
+    AppState, auth::unauthorized_if_needed, error::error_response, fallback::stream_with_fallback,
+};
 
 pub async fn anthropic_messages(
     State(state): State<AppState>,
@@ -22,22 +25,19 @@ pub async fn anthropic_messages(
 
 pub async fn handle_anthropic_normalized(
     State(state): State<AppState>,
-    _headers: HeaderMap,
+    headers: HeaderMap,
     Json(request): Json<Value>,
 ) -> Response {
-    let normalized_request: NormalizedRequest = match serde_json::from_value(request) {
-        Ok(req) => req,
-        Err(e) => {
+    let model_alias = match request.get("model").and_then(Value::as_str) {
+        Some(model) => model.to_string(),
+        None => {
             return error_response(
                 StatusCode::BAD_REQUEST,
                 "invalid_request",
-                format!("failed to parse request: {e}"),
+                "request must include a string model",
             );
         }
     };
-
-    let model_alias = normalized_request.model_alias.clone();
-    let stream = normalized_request.stream;
 
     let route = match state.config.models.get(&model_alias) {
         Some(r) => r,
@@ -49,6 +49,37 @@ pub async fn handle_anthropic_normalized(
             );
         }
     };
+
+    let provider = match state.config.providers.get(&route.provider) {
+        Some(provider) => provider,
+        None => {
+            return error_response(
+                StatusCode::BAD_REQUEST,
+                "invalid_request",
+                format!("model alias `{model_alias}` references unknown provider"),
+            );
+        }
+    };
+
+    if provider.provider_type == ProviderType::AnthropicCompatible {
+        let provider_name = route.provider.clone();
+        let upstream_model = route.model.clone();
+        return proxy_anthropic_native(state, headers, request, &provider_name, &upstream_model)
+            .await;
+    }
+
+    let normalized_request: NormalizedRequest = match serde_json::from_value(request) {
+        Ok(req) => req,
+        Err(e) => {
+            return error_response(
+                StatusCode::BAD_REQUEST,
+                "invalid_request",
+                format!("failed to parse request: {e}"),
+            );
+        }
+    };
+
+    let stream = normalized_request.stream;
 
     let adapter = match state.adapter_registry.get(&route.provider) {
         Some(a) => a.clone(),
@@ -62,10 +93,108 @@ pub async fn handle_anthropic_normalized(
     };
 
     if stream {
-        handle_anthropic_normalized_stream(state, adapter, normalized_request, model_alias).await
+        handle_anthropic_normalized_stream(state, normalized_request, model_alias).await
     } else {
         handle_anthropic_normalized_complete(state, adapter, normalized_request, model_alias).await
     }
+}
+
+async fn proxy_anthropic_native(
+    state: AppState,
+    headers: HeaderMap,
+    mut request: Value,
+    provider_name: &str,
+    upstream_model: &str,
+) -> Response {
+    let Some(provider) = state.config.providers.get(provider_name) else {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            format!("unknown provider `{provider_name}`"),
+        );
+    };
+    let Some(base_url) = provider.base_url.as_deref() else {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            format!("provider `{provider_name}` is missing base_url"),
+        );
+    };
+
+    request["model"] = serde_json::json!(upstream_model);
+    let url = format!("{}/messages", base_url.trim_end_matches('/'));
+    let api_key = provider
+        .api_key_env
+        .as_ref()
+        .and_then(|env_name| std::env::var(env_name).ok());
+
+    let mut upstream_headers = reqwest::header::HeaderMap::new();
+    let anthropic_version = headers
+        .get("anthropic-version")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("2023-06-01");
+    if let Ok(value) = anthropic_version.parse() {
+        upstream_headers.insert("anthropic-version", value);
+    }
+    if let Some(beta) = headers.get("anthropic-beta") {
+        upstream_headers.insert("anthropic-beta", beta.clone());
+    }
+    if let Some(key) = api_key
+        && let Ok(value) = key.parse()
+    {
+        upstream_headers.insert("x-api-key", value);
+    }
+
+    let upstream_response = match state
+        .http
+        .post(url)
+        .headers(upstream_headers)
+        .json(&request)
+        .send()
+        .await
+    {
+        Ok(response) => response,
+        Err(error) => {
+            return error_response(
+                StatusCode::BAD_GATEWAY,
+                "network",
+                format!("upstream request failed: {error}"),
+            );
+        }
+    };
+
+    let status = upstream_response.status();
+    let content_type = upstream_response
+        .headers()
+        .get(http::header::CONTENT_TYPE)
+        .cloned()
+        .unwrap_or_else(|| {
+            if request
+                .get("stream")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+            {
+                "text/event-stream".parse().unwrap()
+            } else {
+                "application/json".parse().unwrap()
+            }
+        });
+
+    let stream = upstream_response
+        .bytes_stream()
+        .map_err(std::io::Error::other);
+
+    Response::builder()
+        .status(status)
+        .header(http::header::CONTENT_TYPE, content_type)
+        .body(Body::from_stream(stream))
+        .unwrap_or_else(|error| {
+            error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                format!("failed to build upstream response: {error}"),
+            )
+        })
 }
 
 async fn handle_anthropic_normalized_complete(
@@ -126,23 +255,10 @@ async fn handle_anthropic_normalized_complete(
 
 async fn handle_anthropic_normalized_stream(
     state: AppState,
-    adapter: std::sync::Arc<dyn ma_core::adapter::ProviderAdapter>,
-    mut request: NormalizedRequest,
+    request: NormalizedRequest,
     model_alias: String,
 ) -> Response {
-    let route = match state.config.models.get(&model_alias) {
-        Some(r) => r,
-        None => {
-            return error_response(
-                StatusCode::BAD_REQUEST,
-                "invalid_request",
-                format!("unknown model alias `{model_alias}`"),
-            );
-        }
-    };
-    request.model_alias = route.model.clone();
-
-    let mut stream = match adapter.stream(request).await {
+    let mut stream = match stream_with_fallback(&state, request, &model_alias).await {
         Ok(s) => s,
         Err(e) => {
             let category = format!("{:?}", e.category);
