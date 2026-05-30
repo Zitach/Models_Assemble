@@ -108,6 +108,7 @@ pub fn router(config: AppConfig) -> Router {
             "/v1/messages",
             post(handlers::anthropic::anthropic_messages),
         )
+        .route("/messages", post(handlers::anthropic::anthropic_messages))
         .layer(from_fn(request_id_middleware))
         .layer(TraceLayer::new_for_http())
         .with_state(state)

@@ -87,6 +87,7 @@ pub enum NormalizedContent {
     },
     ToolResult {
         tool_use_id: String,
+        #[serde(deserialize_with = "deserialize_boxed_content")]
         content: Box<NormalizedContent>,
         #[serde(flatten)]
         extra: HashMap<String, serde_json::Value>,
@@ -193,8 +194,7 @@ pub struct ToolDef {
     pub extra: HashMap<String, serde_json::Value>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum ToolChoice {
     Auto,
@@ -243,6 +243,63 @@ where
         Some(other) => Ok(Some(
             serde_json::from_value(other).map_err(serde::de::Error::custom)?,
         )),
+    }
+}
+
+fn deserialize_boxed_content<'de, D>(de: D) -> Result<Box<NormalizedContent>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    deserialize_content(de).map(Box::new)
+}
+
+impl<'de> Deserialize<'de> for ToolChoice {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = serde_json::Value::deserialize(deserializer)?;
+        let choice_type = value
+            .get("type")
+            .and_then(serde_json::Value::as_str)
+            .or_else(|| value.as_str())
+            .ok_or_else(|| serde::de::Error::custom("tool_choice must be a string or object"))?;
+
+        match choice_type {
+            "auto" => Ok(ToolChoice::Auto),
+            "any" | "required" => Ok(ToolChoice::Any),
+            "none" => Ok(ToolChoice::None),
+            "tool" | "specific" => {
+                let name = value
+                    .get("name")
+                    .and_then(serde_json::Value::as_str)
+                    .ok_or_else(|| {
+                        serde::de::Error::custom("tool_choice tool requires a string name")
+                    })?;
+                Ok(ToolChoice::Specific {
+                    name: name.to_string(),
+                })
+            }
+            other => Err(serde::de::Error::custom(format!(
+                "unsupported tool_choice type `{other}`"
+            ))),
+        }
+    }
+}
+
+impl Serialize for ToolChoice {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match self {
+            ToolChoice::Auto => serde_json::json!({"type": "auto"}).serialize(serializer),
+            ToolChoice::Any => serde_json::json!({"type": "any"}).serialize(serializer),
+            ToolChoice::None => serde_json::json!({"type": "none"}).serialize(serializer),
+            ToolChoice::Specific { name } => {
+                serde_json::json!({"type": "tool", "name": name}).serialize(serializer)
+            }
+        }
     }
 }
 
@@ -530,8 +587,10 @@ mod tests {
             (json!({"type": "auto"}), ToolChoice::Auto),
             (json!({"type": "any"}), ToolChoice::Any),
             (json!({"type": "none"}), ToolChoice::None),
+            (json!("auto"), ToolChoice::Auto),
+            (json!("required"), ToolChoice::Any),
             (
-                json!({"type": "specific", "name": "calculator"}),
+                json!({"type": "tool", "name": "calculator"}),
                 ToolChoice::Specific {
                     name: "calculator".into(),
                 },
@@ -541,6 +600,25 @@ mod tests {
         for (raw, expected) in cases {
             let tc: ToolChoice = serde_json::from_value(raw).expect("parse tool_choice");
             assert_eq!(tc, expected);
+        }
+    }
+
+    #[test]
+    fn tool_result_array_content_parses() {
+        let c: NormalizedContent = serde_json::from_value(json!({
+            "type": "tool_result",
+            "tool_use_id": "toolu_123",
+            "content": [
+                { "type": "text", "text": "result" }
+            ]
+        }))
+        .expect("parse tool_result");
+
+        match c {
+            NormalizedContent::ToolResult { content, .. } => {
+                assert!(matches!(*content, NormalizedContent::Mixed { .. }));
+            }
+            other => panic!("expected ToolResult, got {:?}", other),
         }
     }
 

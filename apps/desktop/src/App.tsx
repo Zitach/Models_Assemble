@@ -1,4 +1,7 @@
 import {
+  invoke,
+} from '@tauri-apps/api/core'
+import {
   Activity,
   Braces,
   ChevronRight,
@@ -8,7 +11,10 @@ import {
   EyeOff,
   Moon,
   Network,
+  PanelLeft,
+  PanelLeftClose,
   Plus,
+  Route,
   Save,
   Search,
   Server,
@@ -53,19 +59,23 @@ type TestResult = {
 type GatewayStatus = {
   running: boolean
   bind: string
+  last_error?: string | null
 }
 
-declare global {
-  interface Window {
-    __TAURI__?: {
-      core?: {
-        invoke: <T>(command: string, args?: Record<string, unknown>) => Promise<T>
-      }
-    }
-  }
+type ModelSelection = {
+  planId: string
+  model: string
+}
+
+type AssembleProfile = {
+  main: ModelSelection
+  fast: ModelSelection
+  max: ModelSelection
+  subagent: ModelSelection
 }
 
 const STORAGE_KEY = 'models-assemble.desktop.plans.v1'
+const PROFILE_KEY = 'models-assemble.desktop.profile.v1'
 const THEME_KEY = 'models-assemble.desktop.theme.v1'
 
 const templates: Plan[] = [
@@ -131,7 +141,10 @@ const templates: Plan[] = [
 function App() {
   const [theme, setTheme] = useState<Theme>(() => readTheme())
   const [plans, setPlans] = useState<Plan[]>(() => readPlans())
-  const [selectedId, setSelectedId] = useState(templates[0].id)
+  const [profile, setProfile] = useState<AssembleProfile>(() =>
+    readProfile(readPlans()),
+  )
+  const [selectedId, setSelectedId] = useState('home')
   const [search, setSearch] = useState('')
   const [showSecret, setShowSecret] = useState(false)
   const [notice, setNotice] = useState('Ready')
@@ -141,23 +154,39 @@ function App() {
     bind: '127.0.0.1:8787',
   })
   const [isGatewayLoading, setIsGatewayLoading] = useState(false)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    const stored = localStorage.getItem('models-assemble.desktop.sidebar.v1')
+    return stored === 'true'
+  })
+  const [isSmallScreen, setIsSmallScreen] = useState(false)
 
   const selectedPlan = plans.find((plan) => plan.id === selectedId) ?? plans[0]
+  const isHome = selectedId === 'home'
   const filteredPlans = plans.filter((plan) =>
     `${plan.name} ${plan.providerId} ${plan.models.join(' ')}`
       .toLowerCase()
       .includes(search.toLowerCase()),
   )
 
+  const effectiveCollapsed = isSmallScreen ? true : sidebarCollapsed
+
   const generatedConfig = useMemo(
-    () => buildConfigPreview(selectedPlan),
-    [selectedPlan],
+    () => buildConfigPreview(plans, profile),
+    [plans, profile],
   )
-  const claudeEnv = useMemo(() => buildClaudeEnv(selectedPlan), [selectedPlan])
+  const claudeEnv = useMemo(() => buildClaudeEnv(), [])
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(stripSecrets(plans)))
   }, [plans])
+
+  useEffect(() => {
+    setProfile((current) => normalizeProfile(current, plans))
+  }, [plans])
+
+  useEffect(() => {
+    localStorage.setItem(PROFILE_KEY, JSON.stringify(profile))
+  }, [profile])
 
   useEffect(() => {
     invokeOrMock<Plan[]>('load_plans', {})
@@ -166,6 +195,13 @@ function App() {
           setPlans(loadedPlans.map(clearPlanSecret))
           setSelectedId(loadedPlans[0].id)
         }
+      })
+      .catch(() => {
+        // Browser preview mode keeps using localStorage.
+      })
+    invokeOrMock<AssembleProfile | null>('load_profile', {})
+      .then((loadedProfile) => {
+        if (loadedProfile) setProfile(loadedProfile)
       })
       .catch(() => {
         // Browser preview mode keeps using localStorage.
@@ -181,6 +217,22 @@ function App() {
     const interval = window.setInterval(refreshGatewayStatus, 5000)
     return () => window.clearInterval(interval)
   }, [])
+
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme)
+  }, [theme])
+
+  useEffect(() => {
+    const mql = window.matchMedia('(max-width: 768px)')
+    const handler = (e: MediaQueryListEvent | MediaQueryList) => setIsSmallScreen(e.matches)
+    handler(mql)
+    mql.addEventListener('change', handler)
+    return () => mql.removeEventListener('change', handler)
+  }, [])
+
+  useEffect(() => {
+    localStorage.setItem('models-assemble.desktop.sidebar.v1', String(sidebarCollapsed))
+  }, [sidebarCollapsed])
 
   function updateSelectedPlan(update: Partial<Plan>) {
     setPlans((current) =>
@@ -247,8 +299,15 @@ function App() {
   async function savePlans() {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(stripSecrets(plans)))
     try {
-      await invokeOrMock('save_plans', { plans: stripSecrets(plans) })
-      setNotice('Saved')
+      await invokeOrMock('save_plans', {
+        plans,
+        profile: normalizeProfile(profile, plans),
+      })
+      setNotice(
+        gatewayStatus.running
+          ? 'Saved; restart Gateway to apply provider keys'
+          : 'Saved',
+      )
     } catch {
       setNotice('Saved locally; Tauri persistence unavailable')
     }
@@ -300,6 +359,10 @@ function App() {
         setGatewayStatus(status)
         setNotice('Gateway stopped')
       } else {
+        await invokeOrMock('save_plans', {
+          plans,
+          profile: normalizeProfile(profile, plans),
+        })
         const status = await invokeOrMock<GatewayStatus>('start_gateway', {
           configPath: '',
         })
@@ -310,19 +373,20 @@ function App() {
       setNotice(
         error instanceof Error ? error.message : 'Gateway operation failed',
       )
+      refreshGatewayStatus()
     } finally {
       setIsGatewayLoading(false)
     }
   }
 
   return (
-    <div className="app-shell" data-theme={theme}>
+    <div className={`app-shell ${effectiveCollapsed ? 'sidebar-collapsed' : ''}`} data-theme={theme}>
       <aside className="rail">
         <div className="brand">
           <div className="brand-mark">
             <Network size={20} />
           </div>
-          <div>
+          <div className="brand-text">
             <strong>Models Assemble</strong>
             <span>Provider Console</span>
           </div>
@@ -340,16 +404,31 @@ function App() {
         <div className="rail-actions">
           <button className="primary-action" onClick={addCustomPlan}>
             <Plus size={16} />
-            Add coding plan
+            <span>Add coding plan</span>
           </button>
         </div>
 
         <div className="plan-list">
-          {filteredPlans.map((plan) => (
+          <button
+            className={`plan-row home-row ${isHome ? 'active' : ''}`}
+            onClick={() => setSelectedId('home')}
+          >
+            <div className="home-mark">
+              <Route size={15} />
+            </div>
+            <div className="plan-row-copy">
+              <strong>Assemble Home</strong>
+              <span>Claude Code local provider</span>
+            </div>
+            <ChevronRight size={16} />
+          </button>
+
+          {filteredPlans.map((plan, index) => (
             <button
               key={plan.id}
               className={`plan-row ${plan.id === selectedPlan.id ? 'active' : ''}`}
               onClick={() => setSelectedId(plan.id)}
+              style={{ ['--i' as any]: index }}
             >
               <div className={`status-dot ${plan.status}`} />
               <div className="plan-row-copy">
@@ -365,9 +444,9 @@ function App() {
           <div className="gateway-icon">
             <Server size={17} />
           </div>
-          <div>
+          <div className="gateway-text">
             <strong>Gateway</strong>
-            <span>{gatewayStatus.bind}</span>
+            <span>{gatewayStatus.last_error || gatewayStatus.bind}</span>
           </div>
           <button
             className={`live-pill ${gatewayStatus.running ? 'running' : 'stopped'}`}
@@ -381,23 +460,36 @@ function App() {
                 : 'Stopped'}
           </button>
         </div>
+
+        <button
+          className="collapse-btn"
+          onClick={() => setSidebarCollapsed((v) => !v)}
+          aria-label={effectiveCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          title={effectiveCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+        >
+          {effectiveCollapsed ? <PanelLeft size={18} /> : <PanelLeftClose size={18} />}
+          <span>Collapse</span>
+        </button>
       </aside>
 
       <main className="workbench">
+        <div className="workbench-content" key={selectedId}>
         <header className="topbar">
           <div>
-            <p className="eyebrow">Coding plan</p>
-            <h1>{selectedPlan.name}</h1>
+            <p className="eyebrow">{isHome ? 'Local provider' : 'Provider'}</p>
+            <h1>{isHome ? 'Assemble Profile' : selectedPlan.name}</h1>
           </div>
           <div className="topbar-actions">
-            <button
-              className="ghost-button"
-              onClick={() => testSelectedPlan(false)}
-              disabled={isTesting}
-            >
-              <Activity size={16} />
-              Test provider
-            </button>
+            {!isHome && (
+              <button
+                className="ghost-button"
+                onClick={() => testSelectedPlan(false)}
+                disabled={isTesting}
+              >
+                <Activity size={16} />
+                Test provider
+              </button>
+            )}
             <button className="ghost-button" onClick={savePlans}>
               <Save size={16} />
               Save
@@ -412,22 +504,119 @@ function App() {
           </div>
         </header>
 
-        <section className="summary-strip">
-          <Metric label="Protocol" value={prettyProtocol(selectedPlan.protocol)} />
-          <Metric label="Models" value={`${selectedPlan.models.length}`} />
-          <Metric label="Template" value={selectedPlan.template} />
-          <Metric label="Last test" value={selectedPlan.lastTest} />
-        </section>
+        {isHome ? (
+          <>
+            <section className="summary-strip">
+              <Metric label="Main" value={selectionLabel(profile.main, plans)} />
+              <Metric label="Fast" value={selectionLabel(profile.fast, plans)} />
+              <Metric label="Max" value={selectionLabel(profile.max, plans)} />
+              <Metric
+                label="Subagent"
+                value={selectionLabel(profile.subagent, plans)}
+              />
+            </section>
 
-        <div className="notice-bar">
+            <section className="panel profile-panel">
+              <div className="section-heading">
+                <div>
+                  <p className="eyebrow">Assemble profile</p>
+                  <h2>Claude Code sees one local provider</h2>
+                </div>
+                <Route size={18} />
+              </div>
+              <div className="profile-grid">
+                <ProfileSlot
+                  label="Main / Sonnet"
+                  value={profile.main}
+                  plans={plans}
+                  onChange={(main) =>
+                    setProfile((current) => ({ ...current, main }))
+                  }
+                />
+                <ProfileSlot
+                  label="Fast / Haiku"
+                  value={profile.fast}
+                  plans={plans}
+                  onChange={(fast) =>
+                    setProfile((current) => ({ ...current, fast }))
+                  }
+                />
+                <ProfileSlot
+                  label="Max / Opus"
+                  value={profile.max}
+                  plans={plans}
+                  onChange={(max) =>
+                    setProfile((current) => ({ ...current, max }))
+                  }
+                />
+                <ProfileSlot
+                  label="Subagent"
+                  value={profile.subagent}
+                  plans={plans}
+                  onChange={(subagent) =>
+                    setProfile((current) => ({ ...current, subagent }))
+                  }
+                />
+              </div>
+            </section>
+          </>
+        ) : (
+          <section className="summary-strip provider-strip">
+            <Metric label="Editing Provider" value={selectedPlan.name} />
+            <Metric label="Protocol" value={prettyProtocol(selectedPlan.protocol)} />
+            <Metric label="Provider Models" value={`${selectedPlan.models.length}`} />
+            <Metric label="Last test" value={selectedPlan.lastTest} />
+          </section>
+        )}
+
+        <div className="notice-bar" key={notice}>
           <span>{notice}</span>
         </div>
 
+        {isHome && (
+          <div className="main-grid home-grid">
+            <section className="panel preview-panel">
+              <div className="section-heading">
+                <div>
+                  <p className="eyebrow">Generated</p>
+                  <h2>Gateway config</h2>
+                </div>
+                <button
+                  className="icon-button"
+                  aria-label="Copy config"
+                  onClick={() => copyText(generatedConfig, 'Gateway config')}
+                >
+                  <Copy size={16} />
+                </button>
+              </div>
+              <pre>{generatedConfig}</pre>
+            </section>
+
+            <section className="panel preview-panel">
+              <div className="section-heading">
+                <div>
+                  <p className="eyebrow">Claude Code</p>
+                  <h2>Environment</h2>
+                </div>
+                <button
+                  className="icon-button"
+                  aria-label="Copy Claude Code environment"
+                  onClick={() => copyText(claudeEnv, 'Claude Code env')}
+                >
+                  <Braces size={18} />
+                </button>
+              </div>
+              <pre>{claudeEnv}</pre>
+            </section>
+          </div>
+        )}
+
+        {!isHome && (
         <div className="main-grid">
           <section className="panel editor-panel">
             <div className="section-heading">
               <div>
-                <p className="eyebrow">Plan details</p>
+                <p className="eyebrow">Provider details</p>
                 <h2>Connection</h2>
               </div>
               <button className="danger-button" onClick={deleteSelectedPlan}>
@@ -511,23 +700,18 @@ function App() {
             </p>
 
             <div className="form-grid">
-              <Field label="API key env">
-                <input
-                  value={selectedPlan.apiKeyEnv}
-                  onChange={(event) =>
-                    updateSelectedPlan({ apiKeyEnv: event.target.value })
-                  }
-                />
-              </Field>
-              <Field label="API key preview">
+              <Field label="API key">
                 <div className="secret-input">
                   <input
                     type={showSecret ? 'text' : 'password'}
-                    value={selectedPlan.apiKeyPreview}
+                    value={selectedPlan.apiKeyPreview || selectedPlan.apiKeyEnv}
                     onChange={(event) =>
-                      updateSelectedPlan({ apiKeyPreview: event.target.value })
+                      updateSelectedPlan({
+                        apiKeyPreview: event.target.value,
+                        apiKeyEnv: defaultApiKeyEnv(selectedPlan),
+                      })
                     }
-                    placeholder="Optional; prefer env vars"
+                    placeholder="Stored in memory for this app session"
                   />
                   <button
                     onClick={() => setShowSecret((value) => !value)}
@@ -601,7 +785,7 @@ function App() {
                 <TerminalSquare size={17} />
                 <div>
                   <strong>Non-stream test</strong>
-                  <span>ma test-provider {selectedPlan.id}</span>
+                  <span>{selectedPlan.providerId} / {selectedPlan.mainModel}</span>
                 </div>
                 <button
                   className="mini-button"
@@ -615,7 +799,7 @@ function App() {
                 <Activity size={17} />
                 <div>
                   <strong>Stream test</strong>
-                  <span>ma test-provider {selectedPlan.id} --stream</span>
+                  <span>{selectedPlan.providerId} / {selectedPlan.mainModel}</span>
                 </div>
                 <button
                   className="mini-button"
@@ -662,6 +846,8 @@ function App() {
             </section>
           </aside>
         </div>
+        )}
+        </div>
       </main>
     </div>
   )
@@ -678,6 +864,62 @@ function readPlans() {
   } catch {
     return templates
   }
+}
+
+function readProfile(plans: Plan[]): AssembleProfile {
+  try {
+    const raw = localStorage.getItem(PROFILE_KEY)
+    if (raw) return normalizeProfile(JSON.parse(raw), plans)
+  } catch {
+    // Fall through to template defaults.
+  }
+  return defaultProfile(plans)
+}
+
+function defaultProfile(plans: Plan[]): AssembleProfile {
+  const glm = plans.find((plan) => plan.id === 'glm') ?? plans[0]
+  const deepseek = plans.find((plan) => plan.id === 'deepseek') ?? plans[0]
+  return {
+    main: {
+      planId: glm.id,
+      model: glm.mainModel || glm.models[0] || '',
+    },
+    fast: {
+      planId: deepseek.id,
+      model: deepseek.fastModel || deepseek.models[0] || '',
+    },
+    max: {
+      planId: glm.id,
+      model: glm.maxModel || glm.models[0] || '',
+    },
+    subagent: {
+      planId: deepseek.id,
+      model: deepseek.subagentModel || deepseek.models[0] || '',
+    },
+  }
+}
+
+function normalizeProfile(profile: AssembleProfile, plans: Plan[]): AssembleProfile {
+  const fallback = defaultProfile(plans)
+  return {
+    main: normalizeSelection(profile?.main, plans, fallback.main),
+    fast: normalizeSelection(profile?.fast, plans, fallback.fast),
+    max: normalizeSelection(profile?.max, plans, fallback.max),
+    subagent: normalizeSelection(profile?.subagent, plans, fallback.subagent),
+  }
+}
+
+function normalizeSelection(
+  selection: ModelSelection | undefined,
+  plans: Plan[],
+  fallback: ModelSelection,
+): ModelSelection {
+  const plan = plans.find((item) => item.id === selection?.planId)
+  if (!plan) return fallback
+  const model = plan.models.includes(selection?.model ?? '')
+    ? selection?.model ?? ''
+    : plan.models[0] || ''
+  return { planId: plan.id, model }
 }
 
 function stripSecrets(plans: Plan[]) {
@@ -700,16 +942,45 @@ async function invokeOrMock<T>(
   command: string,
   args: Record<string, unknown>,
 ): Promise<T> {
-  if (window.__TAURI__?.core?.invoke) {
-    return window.__TAURI__.core.invoke<T>(command, args)
+  if (isTauriRuntime()) {
+    return invoke<T>(command, args)
   }
 
   await new Promise((resolve) => window.setTimeout(resolve, 420))
+  if (command === 'get_gateway_status') {
+    return {
+      running: false,
+      bind: '127.0.0.1:8787',
+    } as T
+  }
+  if (command === 'start_gateway' || command === 'stop_gateway') {
+    return {
+      running: command === 'start_gateway',
+      bind: '127.0.0.1:8787',
+    } as T
+  }
+  if (command === 'load_plans') {
+    return [] as T
+  }
+  if (command === 'load_profile') {
+    return null as T
+  }
+  if (command === 'test_provider') {
+    return {
+      ok: false,
+      status: 'browser-preview',
+      text_preview: 'Tauri command bridge is not active in browser dev mode',
+    } as T
+  }
   return {
     ok: true,
     status: 'browser-preview',
     text_preview: 'Tauri command bridge is not active in browser dev mode',
   } as T
+}
+
+function isTauriRuntime() {
+  return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 }
 
 function Field({
@@ -732,6 +1003,58 @@ function Metric({ label, value }: { label: string; value: string }) {
     <div className="metric">
       <span>{label}</span>
       <strong>{value}</strong>
+    </div>
+  )
+}
+
+function ProfileSlot({
+  label,
+  value,
+  plans,
+  onChange,
+}: {
+  label: string
+  value: ModelSelection
+  plans: Plan[]
+  onChange: (value: ModelSelection) => void
+}) {
+  const plan = plans.find((item) => item.id === value.planId) ?? plans[0]
+  const model = plan.models.includes(value.model)
+    ? value.model
+    : plan.models[0] || ''
+
+  return (
+    <div className="profile-slot">
+      <span>{label}</span>
+      <select
+        value={plan.id}
+        onChange={(event) => {
+          const nextPlan = plans.find((item) => item.id === event.target.value)
+          if (!nextPlan) return
+          onChange({
+            planId: nextPlan.id,
+            model: nextPlan.models[0] || '',
+          })
+        }}
+      >
+        {plans.map((item) => (
+          <option key={item.id} value={item.id}>
+            {item.name}
+          </option>
+        ))}
+      </select>
+      <select
+        value={model}
+        onChange={(event) =>
+          onChange({ planId: plan.id, model: event.target.value })
+        }
+      >
+        {plan.models.map((item) => (
+          <option key={item} value={item}>
+            {item}
+          </option>
+        ))}
+      </select>
     </div>
   )
 }
@@ -766,36 +1089,75 @@ function prettyProtocol(protocol: ProtocolType) {
     : 'OpenAI Chat'
 }
 
-function buildConfigPreview(plan: Plan) {
-  const providerType =
-    plan.protocol === 'anthropic_compatible'
-      ? 'anthropic_compatible'
-      : 'openai_compatible'
-  return `models:
-  ${plan.id}:
-    provider: ${plan.providerId}
-    model: ${plan.mainModel}
-    request_overrides: ${indentInline(plan.requestOverrides)}
+function selectionLabel(selection: ModelSelection, plans: Plan[]) {
+  const plan = plans.find((item) => item.id === selection.planId)
+  if (!plan) return 'Unassigned'
+  return `${plan.template}: ${selection.model || plan.models[0] || 'model'}`
+}
 
-providers:
-  ${plan.providerId}:
+function buildConfigPreview(plans: Plan[], profile: AssembleProfile) {
+  const routes = [
+    ['assemble-main', profile.main],
+    ['assemble-fast', profile.fast],
+    ['assemble-max', profile.max],
+    ['assemble-subagent', profile.subagent],
+  ]
+    .map(([alias, selection]) => {
+      const selected = selection as ModelSelection
+      const plan = plans.find((item) => item.id === selected.planId) ?? plans[0]
+      return `  ${alias}:
+    provider: ${plan.providerId}
+    model: ${selected.model || plan.models[0] || ''}`
+    })
+    .join('\n')
+
+  const providers = plans
+    .map((plan) => {
+      const providerType =
+        plan.protocol === 'anthropic_compatible'
+          ? 'anthropic_compatible'
+          : 'openai_compatible'
+      return `  ${plan.providerId}:
     type: ${providerType}
     base_url: ${plan.baseUrl}
-    api_key_env: ${plan.apiKeyEnv}
+    api_key_env: ${defaultApiKeyEnv(plan)}`
+    })
+    .join('\n')
+
+  return `server:
+  bind: 127.0.0.1:8787
+  api_keys:
+    - ma-local-dev-key
+
+models:
+${routes}
+
+providers:
+${providers}
+
+routing:
+  default: assemble-main
 `
 }
 
-function buildClaudeEnv(plan: Plan) {
+function defaultApiKeyEnv(plan: Plan) {
+  return `${plan.providerId
+    .replace(/[^a-zA-Z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .toUpperCase()}_API_KEY`
+}
+
+function buildClaudeEnv() {
   return JSON.stringify(
     {
       env: {
         ANTHROPIC_BASE_URL: 'http://127.0.0.1:8787',
         ANTHROPIC_AUTH_TOKEN: 'ma-local-dev-key',
-        ANTHROPIC_MODEL: plan.id,
-        ANTHROPIC_DEFAULT_HAIKU_MODEL: plan.fastModel,
-        ANTHROPIC_DEFAULT_SONNET_MODEL: plan.mainModel,
-        ANTHROPIC_DEFAULT_OPUS_MODEL: plan.maxModel,
-        CLAUDE_CODE_SUBAGENT_MODEL: plan.subagentModel,
+        ANTHROPIC_MODEL: 'assemble-main',
+        ANTHROPIC_DEFAULT_HAIKU_MODEL: 'assemble-fast',
+        ANTHROPIC_DEFAULT_SONNET_MODEL: 'assemble-main',
+        ANTHROPIC_DEFAULT_OPUS_MODEL: 'assemble-max',
+        CLAUDE_CODE_SUBAGENT_MODEL: 'assemble-subagent',
       },
       theme: 'dark',
       includeCoAuthoredBy: false,
@@ -803,15 +1165,6 @@ function buildClaudeEnv(plan: Plan) {
     null,
     2,
   )
-}
-
-function indentInline(value: string) {
-  const trimmed = value.trim()
-  if (!trimmed) return '{}'
-  return `|\n${trimmed
-    .split('\n')
-    .map((line) => `      ${line}`)
-    .join('\n')}`
 }
 
 export default App

@@ -4,6 +4,7 @@ use ma_core::{
     AppConfig, ProviderConfig, ProviderType, ServerConfig,
     config::{ModelRoute, ProviderCompliance, RoutingConfig},
 };
+use serde_json::json;
 use tower::ServiceExt;
 
 use crate::{
@@ -146,4 +147,91 @@ async fn anthropic_handler_unknown_model_returns_400() {
         body["error"]["message"],
         "unknown model alias `unknown-model`"
     );
+}
+
+#[tokio::test]
+async fn anthropic_handler_accepts_x_api_key_on_root_messages_route() {
+    let mut config = test_normalized_config();
+    config.server.api_keys = vec!["local-token".to_string()];
+    let app = router(config);
+
+    let mut request = anthropic_request("assemble-mock", false);
+    *request.uri_mut() = "/messages".parse().unwrap();
+    request
+        .headers_mut()
+        .insert("x-api-key", "local-token".parse().unwrap());
+
+    let response = app.oneshot(request).await.unwrap();
+
+    assert_eq!(response.status(), http::StatusCode::OK);
+}
+
+#[tokio::test]
+async fn anthropic_compatible_provider_proxies_native_body_without_normalizing() {
+    let mut upstream = mockito::Server::new_async().await;
+    let mock = upstream
+        .mock("POST", "/messages")
+        .match_body(mockito::Matcher::PartialJson(json!({
+            "model": "upstream-model",
+            "tool_choice": { "type": "tool", "name": "search" },
+            "unknown_map": { "nested": true }
+        })))
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(
+            json!({
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "model": "upstream-model",
+                "content": [{ "type": "text", "text": "ok" }],
+                "stop_reason": "end_turn",
+                "usage": { "input_tokens": 1, "output_tokens": 1 }
+            })
+            .to_string(),
+        )
+        .create_async()
+        .await;
+
+    let mut config = test_normalized_config();
+    config.models.insert(
+        "assemble-main".to_string(),
+        ModelRoute {
+            provider: "native".to_string(),
+            model: "upstream-model".to_string(),
+        },
+    );
+    config.providers.insert(
+        "native".to_string(),
+        ProviderConfig {
+            provider_type: ProviderType::AnthropicCompatible,
+            base_url: Some(upstream.url()),
+            api_key_env: None,
+            compliance: ProviderCompliance::OfficialCodingEndpoint,
+        },
+    );
+
+    let app = router(config);
+    let request = http::Request::builder()
+        .method("POST")
+        .uri("/v1/messages")
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(
+            json!({
+                "model": "assemble-main",
+                "messages": [{ "role": "user", "content": "ping" }],
+                "max_tokens": 64,
+                "tool_choice": { "type": "tool", "name": "search" },
+                "unknown_map": { "nested": true }
+            })
+            .to_string(),
+        ))
+        .unwrap();
+
+    let response = app.oneshot(request).await.unwrap();
+
+    assert_eq!(response.status(), http::StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(body["content"][0]["text"], "ok");
+    mock.assert_async().await;
 }

@@ -8,7 +8,9 @@ use ma_core::normalized::NormalizedRequest;
 use serde_json::Value;
 use std::net::SocketAddr;
 
-use crate::{AppState, auth::unauthorized_if_needed, error::error_response};
+use crate::{
+    AppState, auth::unauthorized_if_needed, error::error_response, fallback::stream_with_fallback,
+};
 
 pub async fn openai_chat_completions(
     State(state): State<AppState>,
@@ -64,7 +66,7 @@ pub async fn handle_openai_normalized(
     };
 
     if stream {
-        handle_openai_normalized_stream(state, adapter, normalized_request, model_alias).await
+        handle_openai_normalized_stream(state, normalized_request, model_alias).await
     } else {
         handle_openai_normalized_complete(state, adapter, normalized_request, model_alias).await
     }
@@ -130,23 +132,10 @@ async fn handle_openai_normalized_complete(
 
 async fn handle_openai_normalized_stream(
     state: AppState,
-    adapter: std::sync::Arc<dyn ma_core::adapter::ProviderAdapter>,
-    mut request: NormalizedRequest,
+    request: NormalizedRequest,
     model_alias: String,
 ) -> Response {
-    let route = match state.config.models.get(&model_alias) {
-        Some(r) => r,
-        None => {
-            return error_response(
-                StatusCode::BAD_REQUEST,
-                "invalid_request",
-                format!("unknown model alias `{model_alias}`"),
-            );
-        }
-    };
-    request.model_alias = route.model.clone();
-
-    let mut stream = match adapter.stream(request).await {
+    let mut stream = match stream_with_fallback(&state, request, &model_alias).await {
         Ok(s) => s,
         Err(e) => {
             let category = format!("{:?}", e.category);
