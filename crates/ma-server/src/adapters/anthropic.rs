@@ -707,7 +707,7 @@ data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text
 
         let adapter = AnthropicAdapter::new(
             "test",
-            &server.url(),
+            server.url(),
             Some("test-key".to_string()),
             "claude-3",
         );
@@ -736,7 +736,7 @@ data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text
             .create_async()
             .await;
 
-        let adapter = AnthropicAdapter::new("test", &server.url(), None, "claude-3");
+        let adapter = AnthropicAdapter::new("test", server.url(), None, "claude-3");
         let request = NormalizedRequest::new("assemble-claude".to_string());
         let result = adapter.complete(request).await;
 
@@ -778,7 +778,7 @@ data: {"type":"message_stop"}
             .create_async()
             .await;
 
-        let adapter = AnthropicAdapter::new("test", &server.url(), None, "claude-3");
+        let adapter = AnthropicAdapter::new("test", server.url(), None, "claude-3");
         let request = NormalizedRequest::new("assemble-claude".to_string());
         let mut stream = adapter.stream(request).await.unwrap();
 
@@ -826,7 +826,7 @@ data: {"type":"content_block_stop","index":0}
             .create_async()
             .await;
 
-        let adapter = AnthropicAdapter::new("test", &server.url(), None, "claude-3");
+        let adapter = AnthropicAdapter::new("test", server.url(), None, "claude-3");
         let request = NormalizedRequest::new("assemble-claude".to_string());
         let mut stream = adapter.stream(request).await.unwrap();
 
@@ -872,7 +872,7 @@ data: {"type":"content_block_stop","index":0}
             .create_async()
             .await;
 
-        let adapter = AnthropicAdapter::new("test", &server.url(), None, "claude-3");
+        let adapter = AnthropicAdapter::new("test", server.url(), None, "claude-3");
         let request = NormalizedRequest::new("assemble-claude".to_string());
         let mut stream = adapter.stream(request).await.unwrap();
 
@@ -931,7 +931,7 @@ data: {"type":"content_block_stop","index":0}
 
         let adapter = AnthropicAdapter::new(
             "test",
-            &server.url(),
+            server.url(),
             Some("secret-key".to_string()),
             "claude-3",
         );
