@@ -1,16 +1,16 @@
-use axum::body::Body;
-use axum::response::Response;
-use axum::{Json, extract::State, response::IntoResponse};
-use futures_util::StreamExt;
-use http::{HeaderMap, StatusCode};
-use ma_core::AppConfig;
-use ma_core::normalized::NormalizedRequest;
-use serde_json::Value;
-use std::net::SocketAddr;
-
 use crate::{
     AppState, auth::unauthorized_if_needed, error::error_response, fallback::stream_with_fallback,
 };
+use axum::body::Body;
+use axum::response::Response;
+use axum::{Json, extract::State, response::IntoResponse};
+use futures_util::{StreamExt, TryStreamExt};
+use http::{HeaderMap, StatusCode};
+use ma_core::AppConfig;
+use ma_core::ProviderType;
+use ma_core::normalized::NormalizedRequest;
+use serde_json::Value;
+use std::net::SocketAddr;
 
 pub async fn openai_chat_completions(
     State(state): State<AppState>,
@@ -26,23 +26,19 @@ pub async fn openai_chat_completions(
 
 pub async fn handle_openai_normalized(
     State(state): State<AppState>,
-    _headers: HeaderMap,
+    headers: HeaderMap,
     Json(request): Json<Value>,
 ) -> Response {
-    let normalized_request: NormalizedRequest = match serde_json::from_value(request) {
-        Ok(req) => req,
-        Err(e) => {
+    let model_alias = match request.get("model").and_then(Value::as_str) {
+        Some(model) => model.to_string(),
+        None => {
             return error_response(
                 StatusCode::BAD_REQUEST,
                 "invalid_request",
-                format!("failed to parse request: {e}"),
+                "request must include a string model",
             );
         }
     };
-
-    let model_alias = normalized_request.model_alias.clone();
-    let stream = normalized_request.stream;
-
     let route = match state.config.models.get(&model_alias) {
         Some(r) => r,
         None => {
@@ -53,7 +49,32 @@ pub async fn handle_openai_normalized(
             );
         }
     };
-
+    let provider = match state.config.providers.get(&route.provider) {
+        Some(provider) => provider,
+        None => {
+            return error_response(
+                StatusCode::BAD_REQUEST,
+                "invalid_request",
+                format!("model alias `{model_alias}` references unknown provider"),
+            );
+        }
+    };
+    if provider.provider_type == ProviderType::OpenAiCompatible {
+        let provider_name = route.provider.clone();
+        let upstream_model = route.model.clone();
+        return proxy_openai_native(state, headers, request, &provider_name, &upstream_model).await;
+    }
+    let normalized_request: NormalizedRequest = match serde_json::from_value(request) {
+        Ok(req) => req,
+        Err(e) => {
+            return error_response(
+                StatusCode::BAD_REQUEST,
+                "invalid_request",
+                format!("failed to parse request: {e}"),
+            );
+        }
+    };
+    let stream = normalized_request.stream;
     let adapter = match state.adapter_registry.get(&route.provider) {
         Some(a) => a.clone(),
         None => {
@@ -64,12 +85,151 @@ pub async fn handle_openai_normalized(
             );
         }
     };
-
     if stream {
         handle_openai_normalized_stream(state, normalized_request, model_alias).await
     } else {
         handle_openai_normalized_complete(state, adapter, normalized_request, model_alias).await
     }
+}
+async fn proxy_openai_native(
+    state: AppState,
+    headers: HeaderMap,
+    mut request: Value,
+    provider_name: &str,
+    upstream_model: &str,
+) -> Response {
+    let Some(provider) = state.config.providers.get(provider_name) else {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            format!("unknown provider `{provider_name}`"),
+        );
+    };
+    let Some(base_url) = provider.base_url.as_deref() else {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            format!("provider `{provider_name}` is missing base_url"),
+        );
+    };
+    request["model"] = serde_json::json!(upstream_model);
+    let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
+    let api_key = provider
+        .api_key_env
+        .as_ref()
+        .and_then(|env_name| std::env::var(env_name).ok());
+    let upstream_headers = build_openai_proxy_headers(&headers, api_key.as_deref());
+    let upstream_response = match state
+        .http
+        .post(url)
+        .headers(upstream_headers)
+        .json(&request)
+        .send()
+        .await
+    {
+        Ok(response) => response,
+        Err(error) => {
+            return error_response(
+                StatusCode::BAD_GATEWAY,
+                "network",
+                format!("upstream request failed: {error}"),
+            );
+        }
+    };
+    let status = upstream_response.status();
+    let response_headers = upstream_response.headers().clone();
+    let fallback_content_type = if request
+        .get("stream")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        "text/event-stream"
+    } else {
+        "application/json"
+    };
+    let stream = upstream_response
+        .bytes_stream()
+        .map_err(std::io::Error::other);
+    let mut builder = Response::builder().status(status);
+    copy_openai_response_headers(builder.headers_mut().unwrap(), &response_headers);
+    if !builder
+        .headers_ref()
+        .is_some_and(|headers| headers.contains_key(http::header::CONTENT_TYPE))
+    {
+        builder = builder.header(http::header::CONTENT_TYPE, fallback_content_type);
+    }
+    builder
+        .body(Body::from_stream(stream))
+        .unwrap_or_else(|error| {
+            error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                format!("failed to build upstream response: {error}"),
+            )
+        })
+}
+fn build_openai_proxy_headers(
+    incoming: &HeaderMap,
+    api_key: Option<&str>,
+) -> reqwest::header::HeaderMap {
+    let mut headers = reqwest::header::HeaderMap::new();
+    for (name, value) in incoming {
+        if should_forward_openai_request_header(name.as_str())
+            && let Ok(header_name) =
+                reqwest::header::HeaderName::from_bytes(name.as_str().as_bytes())
+        {
+            headers.insert(header_name, value.clone());
+        }
+    }
+    if let Some(key) = api_key
+        && let Ok(value) = format!("Bearer {key}").parse()
+    {
+        headers.insert(http::header::AUTHORIZATION, value);
+    }
+    headers
+}
+fn should_forward_openai_request_header(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    if matches!(
+        lower.as_str(),
+        "host"
+            | "connection"
+            | "content-length"
+            | "transfer-encoding"
+            | "content-encoding"
+            | "authorization"
+            | "cookie"
+    ) {
+        return false;
+    }
+    lower == "accept"
+        || lower == "user-agent"
+        || lower == "content-type"
+        || lower.starts_with("openai-")
+        || lower.starts_with("x-")
+}
+fn copy_openai_response_headers(target: &mut HeaderMap, upstream: &HeaderMap) {
+    for (name, value) in upstream {
+        if should_forward_openai_response_header(name.as_str()) {
+            target.insert(name.clone(), value.clone());
+        }
+    }
+}
+fn should_forward_openai_response_header(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    !matches!(
+        lower.as_str(),
+        "connection"
+            | "content-length"
+            | "transfer-encoding"
+            | "content-encoding"
+            | "keep-alive"
+            | "proxy-authenticate"
+            | "proxy-authorization"
+            | "te"
+            | "trailer"
+            | "upgrade"
+    )
 }
 
 async fn handle_openai_normalized_complete(

@@ -128,22 +128,7 @@ async fn proxy_anthropic_native(
         .as_ref()
         .and_then(|env_name| std::env::var(env_name).ok());
 
-    let mut upstream_headers = reqwest::header::HeaderMap::new();
-    let anthropic_version = headers
-        .get("anthropic-version")
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or("2023-06-01");
-    if let Ok(value) = anthropic_version.parse() {
-        upstream_headers.insert("anthropic-version", value);
-    }
-    if let Some(beta) = headers.get("anthropic-beta") {
-        upstream_headers.insert("anthropic-beta", beta.clone());
-    }
-    if let Some(key) = api_key
-        && let Ok(value) = key.parse()
-    {
-        upstream_headers.insert("x-api-key", value);
-    }
+    let upstream_headers = build_anthropic_proxy_headers(&headers, api_key.as_deref());
 
     let upstream_response = match state
         .http
@@ -164,29 +149,31 @@ async fn proxy_anthropic_native(
     };
 
     let status = upstream_response.status();
-    let content_type = upstream_response
-        .headers()
-        .get(http::header::CONTENT_TYPE)
-        .cloned()
-        .unwrap_or_else(|| {
-            if request
-                .get("stream")
-                .and_then(Value::as_bool)
-                .unwrap_or(false)
-            {
-                "text/event-stream".parse().unwrap()
-            } else {
-                "application/json".parse().unwrap()
-            }
-        });
+    let response_headers = upstream_response.headers().clone();
+    let fallback_content_type = if request
+        .get("stream")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        "text/event-stream"
+    } else {
+        "application/json"
+    };
 
     let stream = upstream_response
         .bytes_stream()
         .map_err(std::io::Error::other);
 
-    Response::builder()
-        .status(status)
-        .header(http::header::CONTENT_TYPE, content_type)
+    let mut builder = Response::builder().status(status);
+    copy_anthropic_response_headers(builder.headers_mut().unwrap(), &response_headers);
+    if !builder
+        .headers_ref()
+        .is_some_and(|headers| headers.contains_key(http::header::CONTENT_TYPE))
+    {
+        builder = builder.header(http::header::CONTENT_TYPE, fallback_content_type);
+    }
+
+    builder
         .body(Body::from_stream(stream))
         .unwrap_or_else(|error| {
             error_response(
@@ -195,6 +182,87 @@ async fn proxy_anthropic_native(
                 format!("failed to build upstream response: {error}"),
             )
         })
+}
+
+fn build_anthropic_proxy_headers(
+    incoming: &HeaderMap,
+    api_key: Option<&str>,
+) -> reqwest::header::HeaderMap {
+    let mut headers = reqwest::header::HeaderMap::new();
+
+    for (name, value) in incoming {
+        if should_forward_anthropic_request_header(name.as_str())
+            && let Ok(header_name) =
+                reqwest::header::HeaderName::from_bytes(name.as_str().as_bytes())
+        {
+            headers.insert(header_name, value.clone());
+        }
+    }
+
+    if !headers.contains_key("anthropic-version") {
+        headers.insert("anthropic-version", "2023-06-01".parse().unwrap());
+    }
+
+    if let Some(key) = api_key {
+        if incoming.contains_key(http::header::AUTHORIZATION) {
+            if let Ok(value) = format!("Bearer {key}").parse() {
+                headers.insert(http::header::AUTHORIZATION, value);
+            }
+            headers.remove("x-api-key");
+        } else if let Ok(value) = key.parse() {
+            headers.insert("x-api-key", value);
+        }
+    }
+
+    headers
+}
+
+fn should_forward_anthropic_request_header(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    if matches!(
+        lower.as_str(),
+        "host"
+            | "connection"
+            | "content-length"
+            | "transfer-encoding"
+            | "content-encoding"
+            | "authorization"
+            | "x-api-key"
+            | "cookie"
+    ) {
+        return false;
+    }
+    lower == "accept"
+        || lower == "user-agent"
+        || lower == "content-type"
+        || lower.starts_with("anthropic-")
+        || lower.starts_with("x-")
+        || lower.starts_with("claude-")
+}
+
+fn copy_anthropic_response_headers(target: &mut HeaderMap, upstream: &HeaderMap) {
+    for (name, value) in upstream {
+        if should_forward_anthropic_response_header(name.as_str()) {
+            target.insert(name.clone(), value.clone());
+        }
+    }
+}
+
+fn should_forward_anthropic_response_header(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    !matches!(
+        lower.as_str(),
+        "connection"
+            | "content-length"
+            | "transfer-encoding"
+            | "content-encoding"
+            | "keep-alive"
+            | "proxy-authenticate"
+            | "proxy-authorization"
+            | "te"
+            | "trailer"
+            | "upgrade"
+    )
 }
 
 async fn handle_anthropic_normalized_complete(

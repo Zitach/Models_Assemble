@@ -169,8 +169,15 @@ async fn anthropic_handler_accepts_x_api_key_on_root_messages_route() {
 #[tokio::test]
 async fn anthropic_compatible_provider_proxies_native_body_without_normalizing() {
     let mut upstream = mockito::Server::new_async().await;
+    unsafe {
+        std::env::set_var("MA_TEST_NATIVE_PROXY_KEY", "upstream-secret");
+    }
     let mock = upstream
         .mock("POST", "/messages")
+        .match_header("authorization", "Bearer upstream-secret")
+        .match_header("accept", "text/event-stream")
+        .match_header("user-agent", "claude-code-test")
+        .match_header("x-stainless-runtime", "node")
         .match_body(mockito::Matcher::PartialJson(json!({
             "model": "upstream-model",
             "tool_choice": { "type": "tool", "name": "search" },
@@ -206,7 +213,7 @@ async fn anthropic_compatible_provider_proxies_native_body_without_normalizing()
         ProviderConfig {
             provider_type: ProviderType::AnthropicCompatible,
             base_url: Some(upstream.url()),
-            api_key_env: None,
+            api_key_env: Some("MA_TEST_NATIVE_PROXY_KEY".to_string()),
             compliance: ProviderCompliance::OfficialCodingEndpoint,
         },
     );
@@ -216,6 +223,10 @@ async fn anthropic_compatible_provider_proxies_native_body_without_normalizing()
         .method("POST")
         .uri("/v1/messages")
         .header("content-type", "application/json")
+        .header("authorization", "Bearer local-token")
+        .header("accept", "text/event-stream")
+        .header("user-agent", "claude-code-test")
+        .header("x-stainless-runtime", "node")
         .body(axum::body::Body::from(
             json!({
                 "model": "assemble-main",
@@ -233,5 +244,92 @@ async fn anthropic_compatible_provider_proxies_native_body_without_normalizing()
     assert_eq!(response.status(), http::StatusCode::OK);
     let body = response_json(response).await;
     assert_eq!(body["content"][0]["text"], "ok");
+    mock.assert_async().await;
+}
+#[tokio::test]
+async fn openai_compatible_provider_proxies_native_body_without_normalizing() {
+    let mut upstream = mockito::Server::new_async().await;
+    unsafe {
+        std::env::set_var("MA_TEST_OPENAI_NATIVE_KEY", "upstream-openai-secret");
+    }
+    let mock = upstream
+        .mock("POST", "/chat/completions")
+        .match_header("authorization", "Bearer upstream-openai-secret")
+        .match_header("accept", "text/event-stream")
+        .match_header("user-agent", "openai-test-client")
+        .match_header("x-custom-client", "client-val")
+        .match_body(mockito::Matcher::PartialJson(json!({
+            "model": "upstream-gpt-model",
+            "tool_choice": { "type": "function", "function": { "name": "search" } },
+            "unknown_map": { "nested": true }
+        })))
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_header("x-custom-upstream", "upstream-val")
+        .with_body(
+            json!({
+                "id": "chatcmpl_1",
+                "object": "chat.completion",
+                "created": 1700000000,
+                "model": "upstream-gpt-model",
+                "choices": [{
+                    "index": 0,
+                    "message": { "role": "assistant", "content": "hello from upstream" },
+                    "finish_reason": "stop"
+                }],
+                "usage": { "prompt_tokens": 1, "completion_tokens": 3, "total_tokens": 4 }
+            })
+            .to_string(),
+        )
+        .create_async()
+        .await;
+    let mut config = test_normalized_config();
+    config.models.insert(
+        "assemble-openai".to_string(),
+        ModelRoute {
+            provider: "openai-native".to_string(),
+            model: "upstream-gpt-model".to_string(),
+        },
+    );
+    config.providers.insert(
+        "openai-native".to_string(),
+        ProviderConfig {
+            provider_type: ProviderType::OpenAiCompatible,
+            base_url: Some(upstream.url()),
+            api_key_env: Some("MA_TEST_OPENAI_NATIVE_KEY".to_string()),
+            compliance: ProviderCompliance::CompatibleProxy,
+        },
+    );
+    let app = router(config);
+    let request = http::Request::builder()
+        .method("POST")
+        .uri("/v1/chat/completions")
+        .header("content-type", "application/json")
+        .header("authorization", "Bearer local-token")
+        .header("accept", "text/event-stream")
+        .header("user-agent", "openai-test-client")
+        .header("x-custom-client", "client-val")
+        .body(axum::body::Body::from(
+            json!({
+                "model": "assemble-openai",
+                "messages": [{ "role": "user", "content": "ping" }],
+                "stream": false,
+                "tool_choice": { "type": "function", "function": { "name": "search" } },
+                "unknown_map": { "nested": true }
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), http::StatusCode::OK);
+    assert_eq!(
+        response.headers().get("x-custom-upstream").unwrap(),
+        "upstream-val"
+    );
+    let body = response_json(response).await;
+    assert_eq!(
+        body["choices"][0]["message"]["content"],
+        "hello from upstream"
+    );
     mock.assert_async().await;
 }
